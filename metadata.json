@@ -1,0 +1,7 @@
+{
+  "name": "Job Radar",
+  "description": "A high-performance job search and scraping tool that uses Gemini with Google Search grounding to find real-time job postings and export them directly for Google Sheets.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
