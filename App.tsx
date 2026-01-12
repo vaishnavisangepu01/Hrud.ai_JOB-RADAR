@@ -1,305 +1,223 @@
 
-import React, { useState, useCallback } from 'react';
-import { Search, Download, Clipboard, MapPin, Briefcase, Filter, ChevronRight, Loader2, Database, ExternalLink, TrendingUp, Sparkles, Layers, Calendar, Zap } from 'lucide-react';
-import { JobPosting, SearchCriteria, GroundingSource } from './types';
-import { searchJobs } from './services/geminiService';
-import JobTable from './components/JobTable';
-
-const POPULAR_TITLES = [
-  'Software Engineer', 'Data Scientist', 'Product Manager', 'UX Designer', 'DevOps'
-];
-
-const INDIA_HUBS = [
-  'Bengaluru', 'Mumbai', 'Hyderabad', 'Pune', 'Noida'
-];
+import React, { useState, useRef } from 'react';
+import { JobListing, SearchCriteria, DashboardStats } from './types';
+import { fetchLiveJobs } from './services/geminiService';
+import StatsCard from './components/StatsCard';
+import SearchFilters from './components/SearchFilters';
+import JobCard from './components/JobCard';
 
 const App: React.FC = () => {
-  const [loading, setLoading] = useState(false);
-  const [jobs, setJobs] = useState<JobPosting[]>([]);
-  const [sources, setSources] = useState<GroundingSource[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [criteria, setCriteria] = useState<SearchCriteria>({
-    role: '',
-    skills: '',
-    location: '',
-    jobType: 'All',
-    experienceLevel: 'All',
-    dateRange: 'Anytime',
+    role: 'Frontend Developer',
+    skills: 'React, Tailwind, TypeScript',
+    experienceLevel: '1 to 3 years of experience',
+    location: 'Bangalore, India',
+    jobType: 'Full-time',
+    postedWithin: 'Last 24 Hours',
   });
 
-  const handleSearch = async (e?: React.FormEvent, overrideCriteria?: SearchCriteria) => {
-    if (e) e.preventDefault();
-    const searchParams = overrideCriteria || criteria;
-    if (!searchParams.role) return;
+  const [jobs, setJobs] = useState<JobListing[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [profileImage, setProfileImage] = useState<string>('https://api.dicebear.com/7.x/avataaars/svg?seed=marketing');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-    setLoading(true);
+  const stats: DashboardStats = {
+    totalJobsScraped: jobs.length,
+  };
+
+  const handleCriteriaChange = (key: keyof SearchCriteria, value: any) => {
+    setCriteria(prev => ({ ...prev, [key]: value }));
+  };
+
+  const updateJobStatus = (id: string, status: JobListing['status']) => {
+    setJobs(prev => prev.map(job => job.id === id ? { ...job, status } : job));
+  };
+
+  const performScrape = async () => {
+    setIsLoading(true);
     setError(null);
+    setJobs([]); 
     try {
-      const result = await searchJobs(searchParams);
-      setJobs(result.jobs);
-      setSources(result.sources);
-      if (result.jobs.length === 0) {
-        setError("Zero matches found. Try broadening your criteria or skills.");
+      const results = await fetchLiveJobs(criteria);
+      if (results.length === 0) {
+        setError("No recent jobs found for these criteria. Try broadening your search terms.");
       }
+      setJobs(results);
     } catch (err) {
-      setError("Radar malfunction. Please check your connection and try again.");
-      console.error(err);
+      console.error("Scrape failed", err);
+      setError("AI Engine encountered an error while searching. Please check your API key and try again.");
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  const setAndSearch = (updates: Partial<SearchCriteria>) => {
-    const newCriteria = { ...criteria, ...updates };
-    setCriteria(newCriteria);
-    if (newCriteria.role) {
-      handleSearch(undefined, newCriteria);
-    }
-  };
-
-  const exportToCSV = useCallback(() => {
+  const downloadCSV = () => {
     if (jobs.length === 0) return;
-    const headers = ["Title", "Company", "Location", "Salary", "Score", "Skills Match", "Source"];
+    const headers = ['Title', 'Company', 'Source', 'Location', 'URL', 'Posted (Hours Ago)'];
     const rows = jobs.map(j => [
-      `"${j.title}"`, `"${j.company}"`, `"${j.location}"`, `"${j.salary}"`, j.relevanceScore, `"${j.matchedSkills.join(', ')}"`, `"${j.sourceUrl}"`
+      `"${j.title.replace(/"/g, '""')}"`,
+      `"${j.company.replace(/"/g, '""')}"`,
+      `"${j.source.replace(/"/g, '""')}"`,
+      `"${j.location.replace(/"/g, '""')}"`,
+      `"${j.url.replace(/"/g, '""')}"`,
+      `"${j.postedHoursAgo}h ago"`
     ]);
-    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const csvString = headers.join(",") + "\n" + rows.map(e => e.join(",")).join("\n");
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `JobRadar_${criteria.role.replace(/\s+/g, '_')}.csv`;
+    link.setAttribute("download", `verified_global_jobs_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
     link.click();
-  }, [jobs, criteria.role]);
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
-  const copyToClipboard = useCallback(() => {
-    if (jobs.length === 0) return;
-    const text = jobs.map(j => `${j.title}\t${j.company}\t${j.relevanceScore}%\t${j.sourceUrl}`).join("\n");
-    navigator.clipboard.writeText(text);
-    alert("Copied to clipboard for Google Sheets!");
-  }, [jobs]);
+  const handlePhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setProfileImage(reader.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-slate-900 p-2 rounded-xl shadow-lg">
-              <Zap className="w-5 h-5 text-yellow-400 fill-yellow-400" />
+    <div className="min-h-screen flex flex-col font-['Inter'] selection:bg-purple-200">
+      <header className="bg-white border-b border-purple-100 sticky top-0 z-50 backdrop-blur-md shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 sky-gradient rounded-xl flex items-center justify-center shadow-lg shadow-sky-100">
+              <i className="fa-solid fa-radar text-white text-lg"></i>
             </div>
-            <h1 className="text-xl font-black text-slate-900 tracking-tighter uppercase italic">Job <span className="text-blue-600">Radar</span></h1>
+            <div className="flex flex-col">
+              <h1 className="text-xl font-black tracking-tighter uppercase text-sky-900 leading-none">Job Radar</h1>
+              <span className="text-[8px] font-bold text-emerald-600 uppercase tracking-widest mt-0.5">Verified Global Accuracy Sync</span>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            {jobs.length > 0 && (
-              <>
-                <button onClick={copyToClipboard} className="text-xs font-bold text-slate-600 hover:text-slate-900 transition-colors flex items-center gap-1">
-                  <Clipboard className="w-3.5 h-3.5" /> Copy Sheets
-                </button>
-                <button onClick={exportToCSV} className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-md transition-all">
-                  <Download className="w-3.5 h-3.5" /> Export Data
-                </button>
-              </>
-            )}
+          
+          <div className="flex items-center space-x-4">
+            <input type="file" ref={fileInputRef} onChange={handlePhotoUpload} className="hidden" accept="image/*" />
+            <div 
+              onClick={() => fileInputRef.current?.click()}
+              className="w-10 h-10 rounded-full ring-2 ring-purple-100 overflow-hidden cursor-pointer hover:ring-purple-300 transition-all bg-purple-50"
+            >
+              <img src={profileImage} alt="Profile" className="w-full h-full object-cover" />
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-          
-          {/* Sidebar - INPUT CRITERIA */}
-          <div className="lg:col-span-1 space-y-6">
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 sticky top-24">
-              <h2 className="text-sm font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
-                <Filter className="w-4 h-4 text-blue-600" /> Input Criteria
-              </h2>
-              
-              <form onSubmit={handleSearch} className="space-y-4">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Targeted Role</label>
-                  <div className="relative">
-                    <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input 
-                      type="text" 
-                      placeholder="e.g. Senior Architect"
-                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-sm font-medium"
-                      value={criteria.role}
-                      onChange={e => setCriteria({...criteria, role: e.target.value})}
-                      required
-                    />
-                  </div>
-                </div>
+      <main className="max-w-7xl mx-auto w-full px-6 py-10 flex-grow">
+        <div className="mb-10">
+          <StatsCard 
+            label="Verified Global Results (Current Scan)" 
+            value={stats.totalJobsScraped} 
+            icon="fa-globe" 
+            isLarge={true}
+          />
+        </div>
 
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Required Skills</label>
-                  <div className="relative">
-                    <Layers className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input 
-                      type="text" 
-                      placeholder="React, TypeScript, AWS..."
-                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-sm font-medium"
-                      value={criteria.skills}
-                      onChange={e => setCriteria({...criteria, skills: e.target.value})}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Location</label>
-                  <div className="relative">
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input 
-                      type="text" 
-                      placeholder="City or Remote"
-                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-sm font-medium"
-                      value={criteria.location}
-                      onChange={e => setCriteria({...criteria, location: e.target.value})}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Exp.</label>
-                    <select 
-                      className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none text-xs font-bold"
-                      value={criteria.experienceLevel}
-                      onChange={e => setCriteria({...criteria, experienceLevel: e.target.value as any})}
-                    >
-                      <option>All</option>
-                      <option>Entry</option>
-                      <option>Mid</option>
-                      <option>Senior</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Posting Date</label>
-                    <div className="relative">
-                      <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
-                      <select 
-                        className="w-full pl-9 pr-3 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none text-xs font-bold appearance-none"
-                        value={criteria.dateRange}
-                        onChange={e => setCriteria({...criteria, dateRange: e.target.value as any})}
-                      >
-                        <option>Anytime</option>
-                        <option>Past 24h</option>
-                        <option>Past Week</option>
-                        <option>Past Month</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <button 
-                  type="submit"
-                  disabled={loading}
-                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-slate-900/10 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all mt-4"
-                >
-                  {loading ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <>Run Scraping <ChevronRight className="w-4 h-4" /></>
-                  )}
-                </button>
-              </form>
-
-              {/* Suggestions */}
-              <div className="mt-8">
-                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
-                   <TrendingUp className="w-3 h-3" /> Quick Roles
-                </h3>
-                <div className="flex flex-wrap gap-1.5">
-                  {POPULAR_TITLES.map(title => (
-                    <button
-                      key={title}
-                      onClick={() => setAndSearch({ role: title })}
-                      className="px-3 py-1.5 text-[10px] font-black bg-slate-100 text-slate-500 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors uppercase"
-                    >
-                      {title}
-                    </button>
-                  ))}
-                </div>
-              </div>
+        <div className="purple-section rounded-3xl p-10 mb-12 shadow-md border border-purple-100">
+          <div className="flex items-center justify-between mb-10">
+            <div className="space-y-1">
+              <h3 className="font-black text-purple-950 flex items-center text-[22px] uppercase tracking-tight">
+                <span className="w-12 h-12 rounded-2xl bg-purple-600 text-white flex items-center justify-center mr-5 shadow-xl">
+                  <i className="fa-solid fa-location-dot text-lg"></i>
+                </span>
+                Precision AI Search Engine
+              </h3>
+              <p className="text-[10px] text-purple-500 font-bold uppercase tracking-widest ml-16">
+                Analyzing Live Web Results • Cross-Platform Grounding • Smart Relevance Scoring
+              </p>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-2 hidden md:flex items-center">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mr-3"></div>
+              <span className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">Gemini Grounding Active</span>
             </div>
           </div>
 
-          {/* Results Area - PROCESSING & OUTPUT */}
-          <div className="lg:col-span-3">
-            {loading ? (
-              <div className="flex flex-col items-center justify-center py-32 text-center">
-                <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center animate-pulse mb-6">
-                  <Database className="w-8 h-8 text-blue-600" />
-                </div>
-                <h3 className="text-xl font-black text-slate-900 mb-2 uppercase tracking-tight">AI Pipeline Processing</h3>
-                <p className="text-slate-500 max-w-sm text-sm">Searching LinkedIn, Indeed & Career Pages... Calculating Relevance Scores... Sorting by Skill Match...</p>
-              </div>
-            ) : jobs.length > 0 ? (
-              <div className="space-y-6">
-                <div className="flex items-end justify-between">
-                  <div>
-                    <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Radar Results</h2>
-                    <p className="text-sm text-slate-400 font-medium">Found {jobs.length} roles matching your AI relevance threshold.</p>
-                  </div>
-                  <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 text-[10px] font-black rounded-xl uppercase tracking-widest border border-indigo-100 shadow-sm">
-                    <Zap className="w-3.5 h-3.5 fill-indigo-600" /> Continuous Update Loop
-                  </div>
-                </div>
+          <SearchFilters
+            criteria={criteria}
+            onCriteriaChange={handleCriteriaChange}
+            onSearch={performScrape}
+            isLoading={isLoading}
+          />
+        </div>
 
-                <JobTable jobs={jobs} />
-
-                {/* Grounding Sources */}
-                {sources.length > 0 && (
-                  <div className="mt-12 bg-white p-8 rounded-3xl border border-slate-200">
-                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-2">
-                      <ExternalLink className="w-4 h-4" /> Scraping Map (Source Hubs)
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {sources.map((source, i) => (
-                        <a 
-                          key={i} 
-                          href={source.uri} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="p-4 bg-slate-50 border border-transparent rounded-2xl hover:border-blue-200 hover:bg-white hover:shadow-lg transition-all group"
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-[10px] font-black text-blue-600 uppercase tracking-tighter">{new URL(source.uri).hostname.replace('www.', '')}</span>
-                            <ExternalLink className="w-3 h-3 text-slate-300 group-hover:text-blue-500 transition-colors" />
-                          </div>
-                          <p className="text-sm font-bold text-slate-900 truncate">{source.title}</p>
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : error ? (
-              <div className="bg-red-50 border border-red-100 p-12 rounded-[2.5rem] text-center">
-                <h3 className="text-red-900 font-black text-xl mb-3 uppercase tracking-tight">Signal Interrupted</h3>
-                <p className="text-red-700 text-sm font-medium">{error}</p>
-                <button onClick={() => window.location.reload()} className="mt-6 px-6 py-2 bg-red-600 text-white rounded-xl text-xs font-black uppercase tracking-widest">Retry Scan</button>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-48 text-center bg-white border border-slate-200 rounded-[3rem] shadow-sm">
-                <div className="relative mb-8">
-                   <div className="absolute -inset-8 bg-blue-100/50 rounded-full blur-3xl" />
-                   <div className="w-32 h-32 bg-slate-50 rounded-[2.5rem] flex items-center justify-center relative border border-slate-100 shadow-inner">
-                     <Search className="w-12 h-12 text-slate-300" />
-                   </div>
-                </div>
-                <h3 className="text-3xl font-black text-slate-300 uppercase italic tracking-tighter">Enter Signal</h3>
-                <p className="text-slate-400 max-w-xs mt-3 text-sm font-medium">Define your criteria in the Radar sidebar to start the AI scraping pipeline.</p>
-              </div>
-            )}
+        <div className="w-full">
+          <div className="flex items-center justify-between mb-8">
+            <div className="flex items-center space-x-4">
+              <h4 className="font-black text-sky-900 uppercase tracking-widest text-xs flex items-center">
+                <i className="fa-solid fa-check-double mr-3 text-emerald-500"></i>
+                Verified AI Findings
+              </h4>
+              {jobs.length > 0 && (
+                <span className="bg-emerald-500 text-white text-[10px] font-black px-3 py-1 rounded-full shadow-md flex items-center animate-in fade-in zoom-in">
+                  <i className="fa-solid fa-shield-check mr-2"></i>
+                  {jobs.length} REAL-TIME MATCHES
+                </span>
+              )}
+            </div>
+            <button 
+              onClick={downloadCSV}
+              disabled={jobs.length === 0}
+              className="flex items-center space-x-2 text-[10px] font-black uppercase tracking-widest text-white sky-gradient px-6 py-3.5 rounded-2xl hover:shadow-xl transition-all disabled:opacity-30 active:scale-95 shadow-md"
+            >
+              <i className="fa-solid fa-download"></i>
+              <span>Export Precision Report</span>
+            </button>
           </div>
 
+          {isLoading ? (
+            <div className="sky-section rounded-[2.5rem] border-2 border-dashed border-sky-200 p-32 flex flex-col items-center justify-center bg-white/40 backdrop-blur-sm">
+              <div className="relative">
+                 <div className="w-24 h-24 border-[6px] border-sky-100 border-t-sky-500 rounded-full animate-spin shadow-xl"></div>
+                 <i className="fa-solid fa-earth-americas absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-sky-500 text-xl animate-bounce"></i>
+              </div>
+              <p className="font-black text-sky-900 uppercase tracking-tighter mt-12 text-3xl text-center">Grounding Search Results...</p>
+              <p className="text-xs text-sky-600 mt-5 font-bold uppercase tracking-[0.25em] text-center px-10 leading-relaxed max-w-2xl">
+                CRAWLING GOOGLE SEARCH FOR {criteria.role.toUpperCase()} IN {criteria.location.toUpperCase()}. 
+                ANALYZING SOURCE URLS AND CALCULATING RELEVANCE SCORES.
+              </p>
+            </div>
+          ) : error ? (
+            <div className="sky-section rounded-[2.5rem] border-2 border-dashed border-red-200 p-28 text-center bg-red-50/30">
+              <div className="w-20 h-20 bg-white rounded-[2rem] flex items-center justify-center text-red-400 mx-auto mb-8 shadow-sm border border-red-50">
+                <i className="fa-solid fa-triangle-exclamation text-3xl"></i>
+              </div>
+              <p className="font-black text-red-900 text-xl uppercase tracking-tight">Signal Interrupted</p>
+              <p className="text-sm text-red-600 mt-3 font-medium text-center max-w-md mx-auto leading-relaxed">
+                {error}
+              </p>
+            </div>
+          ) : jobs.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {jobs.map(job => (
+                <JobCard key={job.id} job={job} onUpdateStatus={updateJobStatus} />
+              ))}
+            </div>
+          ) : (
+            <div className="sky-section rounded-[2.5rem] border-2 border-dashed border-sky-100 p-28 text-center bg-white/30">
+              <div className="w-20 h-20 bg-white rounded-[2rem] flex items-center justify-center text-sky-300 mx-auto mb-8 shadow-sm border border-sky-50">
+                <i className="fa-solid fa-magnifying-glass-location text-3xl"></i>
+              </div>
+              <p className="font-black text-sky-900 text-xl uppercase tracking-tight">AI Radar Standby</p>
+              <p className="text-sm text-sky-600 mt-3 font-medium italic text-center max-w-md mx-auto leading-relaxed">
+                Enter your desired role and location, then click Execute to activate the Gemini Search Radar.
+              </p>
+            </div>
+          )}
         </div>
       </main>
 
-      <footer className="bg-white border-t border-slate-200 py-10">
-        <div className="max-w-7xl mx-auto px-4 text-center">
-          <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.5em]">Job Radar System // Architecture V2.0 // Gemini-3-Flash</p>
+      <footer className="bg-white border-t border-purple-50 py-16 mt-24">
+        <div className="max-w-7xl mx-auto px-6 text-center">
+          <p className="text-[11px] font-black text-purple-300 uppercase tracking-[0.6em]">
+            Job Radar AI Global Precision • Gemini Grounding Sync • No External Server Required
+          </p>
         </div>
       </footer>
     </div>
